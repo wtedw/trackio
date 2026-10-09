@@ -1,6 +1,7 @@
 <script>
   import { onMount, tick } from "svelte";
   import embed from "vega-embed";
+  import { histogramSnapshot, histogramBars } from "../lib/histograms.js";
   import {
     createVegaViewManager,
     observeNearViewport,
@@ -18,11 +19,25 @@
   let fullscreen = $state(false);
   let nearViewport = $state(false);
   const viewManager = createVegaViewManager();
+  // Null follows the newest measurement as live logs arrive; a chosen step
+  // remains pinned while inspecting history.
+  let selectedStep = $state(null);
+  let showAll = $state(false);
+  let selectedRun = $state(null);
+  let runs = $derived([...new Map(items.map((item) => [item.key, item.label || item.key])).entries()]);
+  let historyRun = $derived(runs.some(([key]) => key === selectedRun) ? selectedRun : runs[0]?.[0]);
+  let steps = $derived([...new Set(items.map((item) => item.step))].sort((a, b) => a - b));
+  let snapshots = $derived(histogramSnapshot(items, selectedStep ?? Infinity));
+  let stepIndex = $derived(selectedStep === null ? steps.length - 1 : steps.indexOf(selectedStep));
+
+  $effect(() => {
+    if (selectedStep !== null && !steps.includes(selectedStep)) selectedStep = null;
+  });
 
   let legendEntries = $derived.by(() => {
     const seen = new Set();
     const entries = [];
-    for (const item of items) {
+    for (const item of showAll ? items.filter((item) => item.key === historyRun) : snapshots) {
       if (item.key && !seen.has(item.key)) {
         seen.add(item.key);
         entries.push({
@@ -54,23 +69,7 @@
   );
 
   function getBarData() {
-    const rows = [];
-    for (const item of items) {
-      const bins = item.bins || [];
-      const values = item.values || [];
-      const n = Math.min(Math.max(bins.length - 1, 0), values.length);
-      for (let i = 0; i < n; i++) {
-        rows.push({
-          bin_start: bins[i],
-          bin_end: bins[i + 1],
-          count: values[i],
-          key: item.key,
-          label: item.label || item.key,
-          step: item.step,
-        });
-      }
-    }
-    return rows;
+    return histogramBars(showAll ? items.filter((item) => item.key === historyRun) : snapshots);
   }
 
   function cssVar(name, fallback) {
@@ -87,7 +86,7 @@
 
     const yTitle = "count";
 
-    return {
+    const spec = {
       $schema: "https://vega.github.io/schema/vega-lite/v5.json",
       width: "container",
       height: fullscreen ? "container" : 250,
@@ -140,6 +139,17 @@
         },
       },
     };
+    if (showAll) {
+      spec.mark = { type: "rect" };
+      spec.encoding = {
+        x: { field: "step", type: "ordinal", sort: "ascending", title: "step", axis: { labelOverlap: true } },
+        y: { field: "bin_start", type: "quantitative", title: "value", scale: { zero: false } },
+        y2: { field: "bin_end" },
+        color: { field: "count", type: "quantitative", title: "count", scale: { scheme: "blues" } },
+        tooltip: spec.encoding.tooltip,
+      };
+    }
+    return spec;
   }
 
   async function render() {
@@ -177,7 +187,7 @@
   }
 
   function downloadCSV() {
-    const barData = getBarData();
+    const barData = histogramBars(items);
     if (barData.length === 0) return;
     const header = "run,step,bin_start,bin_end,count";
     const rows = barData.map((row) => {
@@ -301,6 +311,9 @@
 
   $effect(() => {
     items;
+    snapshots;
+    showAll;
+    historyRun;
     colorSpecKey;
     title;
     fullscreen;
@@ -343,6 +356,39 @@
   });
 </script>
 
+{#snippet historyControls()}
+  {#if steps.length > 0}
+    <div class="history-controls">
+      <button type="button" aria-pressed={showAll} onclick={() => showAll = !showAll}>All steps</button>
+      {#if showAll}
+        {#if runs.length > 1}
+          <label>Run
+            <select aria-label="Histogram run" value={historyRun} onchange={(event) => selectedRun = event.target.value}>
+              {#each runs as [key, label]}<option value={key}>{label}</option>{/each}
+            </select>
+          </label>
+        {/if}
+        <span>Color shows bin count across all recorded steps</span>
+      {:else}
+      <label>Step
+        <select aria-label="Histogram step" value={selectedStep === null ? "latest" : String(selectedStep)}
+          onchange={(event) => selectedStep = event.target.value === "latest" ? null : Number(event.target.value)}>
+          <option value="latest">Latest</option>
+          {#each steps as step}<option value={String(step)}>{step}</option>{/each}
+        </select>
+      </label>
+      {#if steps.length > 1}
+        <input type="range" min="0" max={steps.length - 1} step="1" value={Math.max(0, stepIndex)}
+          aria-label="Histogram history" oninput={(event) => selectedStep = steps[Number(event.target.value)]} />
+      {/if}
+      <span title="Each run shows its latest histogram at or before this step">
+        ≤ {selectedStep ?? steps.at(-1)}
+      </span>
+      {/if}
+    </div>
+  {/if}
+{/snippet}
+
 <svelte:window onkeydown={handleKeydown} />
 
 <div
@@ -354,8 +400,8 @@
       type="button"
       class="toolbar-btn"
       onclick={downloadCSV}
-      title="Download this histogram's data as a CSV file"
-      aria-label="Download this histogram's data as a CSV file"
+      title="Download full histogram history as CSV"
+      aria-label="Download full histogram history as CSV"
     >
       <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
         <path d="M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8z"/>
@@ -396,6 +442,7 @@
     {#if title}
       <div class="plot-title">{title}</div>
     {/if}
+    {@render historyControls()}
     <div class="plot-chart-wrap">
       <div class="plot" bind:this={container}></div>
     </div>
@@ -430,8 +477,8 @@
         type="button"
         class="toolbar-btn"
         onclick={downloadCSV}
-        title="Download this histogram's data as a CSV file"
-        aria-label="Download this histogram's data as a CSV file"
+        title="Download full histogram history as CSV"
+        aria-label="Download full histogram history as CSV"
       >
         <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
           <path d="M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8z"/>
@@ -471,6 +518,7 @@
     {#if title}
       <div class="plot-title plot-title--fs">{title}</div>
     {/if}
+    {@render historyControls()}
     <div class="fullscreen-chart-wrap">
       <div class="plot-chart-wrap plot-chart-wrap--fs">
         <div class="plot fullscreen-plot" bind:this={container}></div>
@@ -501,6 +549,23 @@
 {/if}
 
 <style>
+  .history-controls {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin: 8px 0;
+    padding: 0 8px;
+    color: var(--body-text-color, #374151);
+    font-size: 12px;
+  }
+  .history-controls select {
+    background: var(--background-fill-primary, white);
+    color: inherit;
+    border: 1px solid var(--border-color-primary, #e5e7eb);
+    border-radius: 4px;
+    padding: 3px;
+  }
+  .history-controls input { flex: 1; min-width: 50px; }
   .plot-container {
     min-width: 350px;
     flex: 1;

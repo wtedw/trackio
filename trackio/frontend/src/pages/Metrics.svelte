@@ -4,6 +4,7 @@
   import LinePlot from "../components/LinePlot.svelte";
   import BarPlot from "../components/BarPlot.svelte";
   import HistogramPlot from "../components/HistogramPlot.svelte";
+  import { histogramHistory } from "../lib/histograms.js";
   import Accordion from "../components/Accordion.svelte";
   import LoadingTrackio from "../components/LoadingTrackio.svelte";
   import RunComparer from "../components/RunComparer.svelte";
@@ -133,35 +134,7 @@
   }
 
   function extractHistograms(originals) {
-    const latest = new Map();
-    for (const r of originals) {
-      for (const [key, value] of Object.entries(r)) {
-        if (
-          !value ||
-          typeof value !== "object" ||
-          value._type !== "trackio.histogram"
-        )
-          continue;
-        if (!Array.isArray(value.bins) || value.bins.length < 2) continue;
-        const mapKey = `${key}\0${r.series_key}`;
-        const prev = latest.get(mapKey);
-        if (!prev || (r.step ?? 0) >= prev.step) {
-          latest.set(mapKey, {
-            metric: key,
-            key: r.series_key,
-            label: r.run,
-            step: r.step ?? 0,
-            bins: value.bins,
-            values: value.values ?? [],
-          });
-        }
-      }
-    }
-    const byMetric = {};
-    for (const item of latest.values()) {
-      if (!byMetric[item.metric]) byMetric[item.metric] = [];
-      byMetric[item.metric].push(item);
-    }
+    const byMetric = histogramHistory(originals);
     histogramItems = byMetric;
     histogramMetrics = Object.keys(byMetric).sort();
   }
