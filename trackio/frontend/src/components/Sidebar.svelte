@@ -8,6 +8,7 @@
   import GradioTextbox from "./GradioTextbox.svelte";
   import { buildColorMap, getColorForIndex } from "../lib/stores.js";
   import { latestOnlySelection } from "../lib/selection.js";
+  import { getQueryParam } from "../lib/router.js";
   import { filterMetricsByRegex } from "../lib/dataProcessing.js";
   import { computeGroupByOptions, computeGroupedRuns } from "../lib/grouping.js";
   import {
@@ -110,7 +111,8 @@
   let groupByOptions = $derived(computeGroupByOptions(runConfigs));
   let groupedRuns = $derived(computeGroupedRuns(filteredRuns, runConfigs, groupByRaw));
 
-  let latestOnly = $state(false);
+  // Explicit selections in shared links take precedence over the default.
+  let latestOnly = $state(!getQueryParam("run_ids") && !getQueryParam("runs"));
   let shareTab = $state("share");
   let copyFeedback = $state(null);
 
